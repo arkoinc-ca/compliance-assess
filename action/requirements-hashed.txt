@@ -1,0 +1,12 @@
+# P0-07: Hashed requirements for action install step.
+# Generated with: uv export --output-file action/requirements-hashed.txt
+# Regenerate when compliance-assess version is bumped.
+# TODO(release): Run `uv pip compile --generate-hashes pyproject.toml -o action/requirements-hashed.txt`
+#   after a PyPI publish to populate real SHA-256 hashes.
+#
+# Until hashes are available from a real PyPI release, the action install step
+# falls back to pinning without --require-hashes (see action.yml install step).
+# This file is a placeholder that MUST be replaced before any public release.
+#
+# compliance-assess==0.0.1 \
+#     --hash=sha256:REPLACE_WITH_REAL_HASH_AFTER_PYPI_PUBLISH

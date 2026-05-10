@@ -1,0 +1,184 @@
+name: "compliance-assess"
+description: "Run a compliance gap-finder scan against your repository and emit SARIF for GitHub Code Scanning."
+author: "Arkoinc Inc."
+
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  target:
+    description: "Path to the directory to scan, relative to the repository root."
+    required: false
+    default: "."
+  profile:
+    description: "Path to a compliance profile YAML (e.g., profiles/region/ca-on.yaml from compliance-catalog)."
+    required: true
+  catalog:
+    description: "Path or git ref of the compliance-catalog repo. Use 'pip' to fetch the published catalog package; use a directory path for a local checkout."
+    required: false
+    default: "pip"
+  catalog-version:
+    description: "When catalog=pip, the version specifier to install (e.g., '0.1.0', '>=0.1,<0.2')."
+    required: false
+    default: ">=0.1,<0.2"
+  allow-unhashed:
+    description: "If true, fall back to non-hashed pip install when requirements-hashed.txt is missing or unpopulated. Defaults to false (fail closed). Set to true only for pre-PyPI development use; this disables supply-chain integrity for the install step."
+    required: false
+    default: "false"
+  format:
+    description: "Comma-separated list of output formats: sarif, markdown, html, csv."
+    required: false
+    default: "sarif,markdown"
+  output-dir:
+    description: "Directory to write reports into."
+    required: false
+    default: "compliance-reports"
+  upload-sarif:
+    description: "If true, upload SARIF to GitHub Code Scanning. Requires actions/checkout and security-events:write permission."
+    required: false
+    default: "true"
+  fail-on-high:
+    description: "If true, action exits 1 when any high-severity finding is produced."
+    required: false
+    default: "true"
+
+outputs:
+  sarif-path:
+    description: "Absolute path to the generated SARIF file."
+    value: ${{ steps.scan.outputs.sarif_path }}
+  findings-count:
+    description: "Total number of findings produced by this scan."
+    value: ${{ steps.scan.outputs.findings_count }}
+  high-findings-count:
+    description: "Number of high-severity findings."
+    value: ${{ steps.scan.outputs.high_findings_count }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0  # TODO(P0-08): verify SHA — H-27
+      with:
+        python-version: "3.11"
+
+    - name: Install compliance-assess
+      shell: bash
+      env:
+        ACTION_REF: ${{ github.action_ref }}
+        ACTION_PATH: ${{ github.action_path }}
+        CATALOG_INPUT: ${{ inputs.catalog }}
+        CATALOG_VERSION: ${{ inputs.catalog-version }}
+        ALLOW_UNHASHED: ${{ inputs.allow-unhashed }}
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip
+
+        # V-C fix (CRITICAL): use github.action_path, not $(dirname "$0") which resolves to GHA temp script dir.
+        HASHED_REQ="${ACTION_PATH}/action/requirements-hashed.txt"
+
+        # V-C fix (CRITICAL): a populated hashed requirements file is one with at least one
+        # uncommented '--hash=sha256:' entry. The placeholder file (comments only) does not count.
+        HASHED_VALID=0
+        if [ -f "$HASHED_REQ" ]; then
+          if grep -qE '^[^#].*--hash=sha256:[a-f0-9]{64}' "$HASHED_REQ"; then
+            HASHED_VALID=1
+          fi
+        fi
+
+        if [ "$HASHED_VALID" -eq 1 ]; then
+          python -m pip install --require-hashes -r "$HASHED_REQ"
+        elif [ "$ALLOW_UNHASHED" = "true" ]; then
+          echo "::warning::allow-unhashed=true — installing compliance-assess WITHOUT --require-hashes."
+          echo "::warning::This bypasses supply-chain integrity. Use only for pre-PyPI development."
+          if [[ "$ACTION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            VER="${ACTION_REF#v}"
+            python -m pip install "compliance-assess==${VER}"
+          else
+            python -m pip install compliance-assess
+          fi
+        else
+          echo "::error::Hash-pinned install requires a populated $HASHED_REQ"
+          echo "::error::Status: file exists with only comment/placeholder lines (no real --hash entries)."
+          echo "::error::Resolution: this gap closes when compliance-assess v0.2 publishes to PyPI (see H-13)."
+          echo "::error::Workaround: pass 'allow-unhashed: true' to opt out of integrity checks (NOT recommended)."
+          exit 1
+        fi
+
+        # V-C fix (HIGH): regex must accept its own default value '>=0.1,<0.2' and other PEP 440 specifiers.
+        # Accepts: '0.1.0', '==0.1.0', '>=0.1,<0.2', '~=0.1.5', '!=0.0.1', '>=1.0'
+        # Rejects: '; rm -rf /', '0.1.0 && curl evil', empty string, leading whitespace, shell metachars
+        if [ "$CATALOG_INPUT" = "pip" ]; then
+          if ! echo "$CATALOG_VERSION" | grep -qE '^([<>=!~]=?|==)?[0-9][a-zA-Z0-9._+!,*<>=-]*$'; then
+            echo "::error::catalog-version input has invalid format: ${CATALOG_VERSION}"
+            echo "::error::Accepted examples: '0.1.0', '==0.1.0', '>=0.1,<0.2', '~=0.1.5'"
+            exit 1
+          fi
+          python -m pip install "compliance-catalog${CATALOG_VERSION}"
+        fi
+
+    - name: Run compliance scan
+      id: scan
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        PROFILE: ${{ inputs.profile }}
+        CATALOG: ${{ inputs.catalog }}
+        FORMAT: ${{ inputs.format }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$OUTPUT_DIR"
+        CATALOG_FLAG=()
+        if [ "$CATALOG" != "pip" ]; then
+          CATALOG_FLAG=(--catalog "$CATALOG")
+        fi
+        # A-H2: capture exit code (0=clean, 1=has_high, 2=scan_degraded)
+        set +e
+        compliance-assess scan "$TARGET" \
+          --profile "$PROFILE" \
+          "${CATALOG_FLAG[@]}" \
+          --format "$FORMAT" \
+          --out "$OUTPUT_DIR" \
+          | tee "$OUTPUT_DIR/scan.log"
+        SCAN_EXIT=${PIPESTATUS[0]}
+        set -e
+        echo "scan_exit_code=${SCAN_EXIT}" >> "$GITHUB_OUTPUT"
+        SARIF_PATH="$OUTPUT_DIR/compliance-assessment.sarif"
+        if [ -f "$SARIF_PATH" ]; then
+          echo "sarif_path=$SARIF_PATH" >> "$GITHUB_OUTPUT"
+        fi
+        SUMMARY="$OUTPUT_DIR/compliance-summary.json"
+        if [ -f "$SUMMARY" ]; then
+          # MED-22: pass path via env var; never interpolate into the Python source string.
+          TOTAL=$(SUMMARY="$SUMMARY" python -c "import json,os; print(json.load(open(os.environ['SUMMARY'])).get('total', 0))")
+          HIGH=$(SUMMARY="$SUMMARY" python -c "import json,os; print(json.load(open(os.environ['SUMMARY'])).get('high', 0))")
+        else
+          TOTAL=0
+          HIGH=0
+        fi
+        echo "findings_count=${TOTAL}" >> "$GITHUB_OUTPUT"
+        echo "high_findings_count=${HIGH}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload SARIF to GitHub Code Scanning
+      if: ${{ inputs.upload-sarif == 'true' && steps.scan.outputs.sarif_path != '' }}
+      # WARNING: floating tag — TODO(P0-08): SHA needed — verify and pin before v0.2 release (H-13/H-27)
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.scan.outputs.sarif_path }}
+
+    - name: Fail on high-severity findings
+      if: ${{ inputs.fail-on-high == 'true' }}
+      shell: bash
+      env:
+        HIGH_COUNT: ${{ steps.scan.outputs.high_findings_count }}
+        SCAN_EXIT: ${{ steps.scan.outputs.scan_exit_code }}
+      run: |
+        # A-H2: exit 2 means scan partially failed (degraded); always surface as error.
+        if [ "${SCAN_EXIT:-0}" -eq 2 ]; then
+          echo "::warning::compliance-assess scan partially failed (exit 2). Results may be incomplete."
+        fi
+        if [ "${HIGH_COUNT:-0}" -gt 0 ]; then
+          echo "::error::compliance-assess found ${HIGH_COUNT} high-severity finding(s)."
+          exit 1
+        fi
