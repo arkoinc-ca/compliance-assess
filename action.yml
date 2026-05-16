@@ -163,7 +163,7 @@ runs:
     - name: Upload SARIF to GitHub Code Scanning
       if: ${{ inputs.upload-sarif == 'true' && steps.scan.outputs.sarif_path != '' }}
       # WARNING: floating tag — TODO(P0-08): SHA needed — verify and pin before v0.2 release (H-13/H-27)
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@v4
       with:
         sarif_file: ${{ steps.scan.outputs.sarif_path }}
 
