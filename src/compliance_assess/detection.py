@@ -135,9 +135,10 @@ class SemgrepEngine:
             if not rule_file.exists():
                 continue
             try:
+                semgrep_bin = shutil.which("semgrep") or "semgrep"
                 proc = subprocess.run(
                     [
-                        "semgrep",
+                        semgrep_bin,
                         "--config",
                         str(rule_file),
                         "--json",

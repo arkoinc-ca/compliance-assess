@@ -62,12 +62,12 @@ def _sarif_level(finding: Finding) -> str:
 _CSV_CLASSIC_TRIGGERS: frozenset[str] = frozenset(("=", "+", "-", "@", "\t", "\r"))
 # Unicode chars that can disguise formula-injection payloads when prepended
 _CSV_UNICODE_TRICKS: frozenset[str] = frozenset((
-    "​",  # zero-width space
-    "‌",  # zero-width non-joiner
-    "‍",  # zero-width joiner
-    "‮",  # right-to-left override
-    "‭",  # left-to-right override
-    "﻿",  # BOM (byte-order mark)
+    "\u200b",  # zero-width space
+    "\u200c",  # zero-width non-joiner
+    "\u200d",  # zero-width joiner
+    "\u202e",  # right-to-left override
+    "\u202d",  # left-to-right override
+    "\ufeff",  # BOM (byte-order mark)
 ))
 
 
@@ -113,7 +113,7 @@ def _partial_fingerprint(
 ) -> str:
     """A-H3: Stable 16-char hex fingerprint for SARIF partialFingerprints."""
     key = f"{rule_id}:{file_path or ''}:{line or 0}:{message}"
-    return hashlib.sha1(key.encode()).hexdigest()[:16]
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
 class SARIFEmitter:
