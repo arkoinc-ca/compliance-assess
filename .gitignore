@@ -12,4 +12,4 @@ coverage.xml
 .coverage
 .DS_Store
 *.swp
-tests/last-run.log
+*.log
