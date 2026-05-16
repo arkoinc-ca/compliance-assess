@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2  # TODO(P0-08): verify SHA
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4.2.2  # TODO(P0-08): verify SHA
 
       - name: Log in to Container Registry
         uses: docker/login-action@9780b0c442b0543c178a0a3e0b5451c56a26e9c3 # v3.3.0  # TODO(P0-08): verify SHA
