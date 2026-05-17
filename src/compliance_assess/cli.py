@@ -154,8 +154,19 @@ def scan(
 
     ar = assessment.value
     severity_counts: dict[str, int] = {}
+    # Seed every known detection method at 0 so by_method always reports each one
+    # explicitly — "semgrep": 0 alongside "questionnaire" > 0 is the visible signal
+    # that automated detection ran but produced nothing (or was degraded).
+    method_counts: dict[str, int] = {
+        "semgrep": 0,
+        "otel": 0,
+        "questionnaire": 0,
+        "manual": 0,
+        "error": 0,
+    }
     for f in ar.findings:
         severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
+        method_counts[f.method] = method_counts.get(f.method, 0) + 1
 
     # Structured audit log — machine-readable summary (never logs raw code content).
     _log.info(
@@ -196,6 +207,9 @@ def scan(
         "medium": severity_counts.get("medium", 0),
         "low": severity_counts.get("low", 0),
         "controls_assessed": ar.controls_assessed,
+        # by_method lets CI consumers see whether automated detection actually ran
+        # (e.g. semgrep=0 alongside questionnaire>0 signals the scanner is degraded).
+        "by_method": method_counts,
     }
     summary_path = out_dir / "compliance-summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")

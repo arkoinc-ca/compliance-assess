@@ -62,3 +62,8 @@ def test_scan_writes_markdown_and_summary_json(tmp_path: Path) -> None:
     assert summary_file.exists(), "compliance-summary.json was not written"
     summary = json.loads(summary_file.read_text(encoding="utf-8"))
     assert "total" in summary, f"summary JSON missing 'total' key: {summary}"
+    # by_method is the breakdown CI consumers use to confirm automated detection
+    # ran; its absence is what hid the F-1 silent-miss bug from operators.
+    assert isinstance(summary.get("by_method"), dict), (
+        f"summary JSON missing 'by_method' breakdown: {summary}"
+    )

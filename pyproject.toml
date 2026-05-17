@@ -28,6 +28,8 @@ dev = [
     "ruff>=0.5",
     "jsonschema>=4.0",
     "types-jsonschema",
+    "types-PyYAML",
+    "semgrep==1.95.0; sys_platform != 'win32'",
 ]
 
 [project.scripts]
@@ -43,12 +45,12 @@ warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
 disallow_any_generics = true
-exclude = ["tests/fixtures/sample-app"]
+exclude = ["tests/fixtures/sample-app", "tests/fixtures/corpus"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-exclude = ["tests/fixtures/sample-app"]
+exclude = ["tests/fixtures/sample-app", "tests/fixtures/corpus"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N"]

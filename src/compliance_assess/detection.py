@@ -25,6 +25,26 @@ _SEVERITY_MAP: dict[str, SeverityLiteral] = {
     "critical": "critical",
 }
 
+# Error-type keywords in semgrep's errors[] that indicate one of *our* rules
+# failed to parse, as opposed to a target source file semgrep could not parse.
+# Each keyword matches exactly one semgrep rule-error `type` ("Rule parse error",
+# "Pattern parse error", "Invalid rule schema") and none of the target-error
+# types ("Syntax error", "Lexical error", "Timeout", "Out of memory", …).
+_RULE_ERROR_KEYWORDS: frozenset[str] = frozenset({"rule", "pattern", "schema"})
+
+
+def _is_semgrep_rule_error(err: dict[str, object]) -> bool:
+    """Return True when a semgrep error entry represents a broken detection rule.
+
+    Semgrep JSON errors[] entries whose `type` contains any of rule/pattern/
+    schema, or whose `message` mentions "invalid yaml", indicate that one of our
+    rules could not be loaded.  All other entries (Syntax error, Lexical error,
+    Timeout, …) are target-file parse failures — non-fatal for the scan.
+    """
+    err_type = str(err.get("type", "")).lower()
+    err_msg = str(err.get("message", "")).lower()
+    return any(k in err_type for k in _RULE_ERROR_KEYWORDS) or "invalid yaml" in err_msg
+
 
 def _normalize_severity(raw: str) -> SeverityLiteral:
     """Coerce a free-form severity string from catalog/YAML to a valid SeverityLiteral.
@@ -149,14 +169,36 @@ class SemgrepEngine:
                     timeout=max(1.0, timeout_s),
                 )
                 rc = proc.returncode
-                if rc == 0:
-                    # Success — no findings.
-                    pass
-                elif rc == 1:
-                    # Success — findings present; parse JSON.
-                    stdout = proc.stdout or b"{}"
-                    if not stdout.strip():
-                        # A-H7: empty stdout is anomalous — emit sentinel
+                raw_stdout: bytes = proc.stdout or b""
+
+                # --- JSON is authoritative; exit code is only a diagnostic. ---
+                # semgrep always writes a complete JSON document to stdout with
+                # --json regardless of exit code.  Reading findings only when
+                # rc==1 (old contract) silently discards results on rc==0 and
+                # rc>=2.  Read the JSON unconditionally and fall back to the
+                # empty-stdout / error-only paths below.
+                if not raw_stdout.strip():
+                    # stdout completely absent or whitespace-only.
+                    if rc != 0:
+                        stderr_snippet = proc.stderr.decode(errors="replace")[:500]
+                        _log.warning(
+                            "semgrep_error",
+                            returncode=rc,
+                            stderr=stderr_snippet,
+                            control_id=control.id,
+                        )
+                        findings.append(
+                            Finding(
+                                control_id=control.id,
+                                severity="medium",
+                                method="error",
+                                file=None,
+                                line=None,
+                                message=f"semgrep failed for control {control.id}: see logs",
+                            )
+                        )
+                    else:
+                        # A-H7: rc==0 + empty stdout is anomalous — emit sentinel.
                         _log.warning(
                             "semgrep_empty_stdout",
                             control_id=control.id,
@@ -171,31 +213,19 @@ class SemgrepEngine:
                                 message="semgrep failed: returned no output",
                             )
                         )
-                        continue
-                    output = json.loads(stdout)
-                    for r in output.get("results", []):
-                        raw_msg: str = r.get("extra", {}).get("message", "")
-                        msg = raw_msg.strip() or "(semgrep returned no message)"
-                        findings.append(
-                            Finding(
-                                control_id=control.id,
-                                severity=_normalize_severity(control.severity),
-                                method="semgrep",
-                                file=r.get("path"),
-                                line=r.get("start", {}).get("line"),
-                                message=msg,
-                                # A-M5: carry control title for SARIF shortDescription
-                                control_title=control.title or None,
-                            )
-                        )
-                else:
-                    # A-H7: rc >= 2 — semgrep error; emit sentinel so it trips exit code 2.
-                    stderr_snippet = proc.stderr.decode(errors="replace")[:500]
+                    continue
+
+                output = json.loads(raw_stdout)  # JSONDecodeError caught below
+
+                # Guard: semgrep --json always returns an object with a results
+                # key.  Anything else (a bare list, a schema mismatch, a results
+                # key dropped) must not be read as "no findings" — that would be
+                # a silent miss.  Emit a sentinel so the scan is flagged degraded.
+                if not isinstance(output, dict) or "results" not in output:
                     _log.warning(
-                        "semgrep_error",
-                        returncode=rc,
-                        stderr=stderr_snippet,
+                        "semgrep_unexpected_output",
                         control_id=control.id,
+                        returncode=rc,
                     )
                     findings.append(
                         Finding(
@@ -204,7 +234,66 @@ class SemgrepEngine:
                             method="error",
                             file=None,
                             line=None,
-                            message=f"semgrep failed for control {control.id}: see logs",
+                            message=(
+                                f"semgrep failed: unexpected JSON output for control "
+                                f"{control.id} (no results key) — see logs"
+                            ),
+                        )
+                    )
+                    continue
+
+                # --- Emit a Finding for every result entry ---
+                for r in output.get("results", []):
+                    raw_msg: str = r.get("extra", {}).get("message", "")
+                    msg = raw_msg.strip() or "(semgrep returned no message)"
+                    findings.append(
+                        Finding(
+                            control_id=control.id,
+                            severity=_normalize_severity(control.severity),
+                            method="semgrep",
+                            file=r.get("path"),
+                            line=r.get("start", {}).get("line"),
+                            message=msg,
+                            # A-M5: carry control title for SARIF shortDescription
+                            control_title=control.title or None,
+                        )
+                    )
+
+                # --- Inspect errors[] — partition into rule-errors vs target-errors ---
+                semgrep_errors: list[dict[str, object]] = output.get("errors", [])
+                rule_errors = [e for e in semgrep_errors if _is_semgrep_rule_error(e)]
+                target_errors = [e for e in semgrep_errors if not _is_semgrep_rule_error(e)]
+
+                if target_errors:
+                    _log.warning(
+                        "semgrep_partial_scan",
+                        control_id=control.id,
+                        error_count=len(target_errors),
+                    )
+
+                if rule_errors:
+                    first = rule_errors[0]
+                    detail = (
+                        f"{first.get('rule_id', '?')}: "
+                        f"{(str(first.get('message', '')).splitlines() or [''])[0]}"
+                    )
+                    _log.error(
+                        "semgrep_rule_error",
+                        control_id=control.id,
+                        error_count=len(rule_errors),
+                        detail=detail,
+                    )
+                    findings.append(
+                        Finding(
+                            control_id=control.id,
+                            severity="medium",
+                            method="error",
+                            file=None,
+                            line=None,
+                            message=(
+                                f"semgrep failed: a detection rule for control "
+                                f"{control.id} could not be parsed — see logs"
+                            ),
                         )
                     )
             except subprocess.TimeoutExpired:
