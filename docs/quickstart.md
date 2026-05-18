@@ -58,7 +58,7 @@ Command flags:
 - `target` (positional): path to directory to scan
 - `--profile` / `-p`: path to profile YAML (required)
 - `--catalog`: path to compliance-catalog root; defaults to `../compliance-catalog`
-- `--format`: comma-separated output formats (sarif, markdown, html, csv); default is `sarif,markdown`
+- `--format`: comma-separated output formats (sarif, markdown, html, csv, pdf); default is `sarif,markdown`. The `pdf` format requires the optional `pdf` extra: `pip install 'compliance-assess[pdf]'`
 - `--out`: output directory for reports; defaults to current directory
 - `--timeout`: per-scan timeout in seconds; default 30.0
 
@@ -82,6 +82,8 @@ Then generates reports in the output directory:
 **SARIF** (`compliance-assessment.sarif`): machine-readable format compatible with GitHub Code Scanning and VS Code SARIF Viewer. Each finding includes location, severity, rule ID, and remediation guidance.
 
 **Markdown** (`compliance-assessment.md`): human-readable report grouped by control, with PII-safe summaries and links to affected files.
+
+**PDF** (`compliance-assessment.pdf`): a branded, client-ready report — cover page, executive summary, compliance-posture table, per-finding detail with recommended remediation, and scan-metadata appendix. Suitable for sharing with stakeholders. Requires the `pdf` extra.
 
 ## Exit Codes
 

@@ -40,6 +40,17 @@ def test_questionnaire_engine_emits_finding_for_mapped_control(
     assert all(f.message.startswith("Manual review required") for f in findings)
 
 
+def test_questionnaire_mapping_refs_all_resolve() -> None:
+    """Every questionnaire file referenced by mapping.yaml must exist on disk.
+
+    A missing file silently degrades that control's finding to the generic
+    'see runbook for control <id>' message instead of a precise
+    'see <file>#<fragment-id>' link, hiding the real attestation question.
+    """
+    engine = QuestionnaireEngine(CATALOG)
+    assert engine.validate_mapping_refs() == []
+
+
 def test_otel_engine_returns_empty_list(pipeda_001: Control) -> None:
     engine = OtelEngine(CATALOG)
     findings = engine.detect(pipeda_001, CATALOG, [])
@@ -214,6 +225,11 @@ def test_semgrep_rc2_target_error_emits_finding_no_sentinel(
 
     assert len(semgrep_findings) == 1, "expected the real finding to be returned"
     assert len(error_sentinels) == 0, "target-parse errors must not produce a sentinel"
+    # The unparseable target file must be recorded as a coverage gap so the
+    # report can surface it — without this it is invisible outside scan logs.
+    assert [(sf.path, sf.reason) for sf in engine.skipped_files] == [
+        ("generated.py", "Syntax error")
+    ]
 
 
 def test_semgrep_rc2_rule_error_emits_finding_and_sentinel(

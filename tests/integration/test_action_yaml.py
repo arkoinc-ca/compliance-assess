@@ -12,7 +12,6 @@ specifiers and blocks injection strings.
 
 import subprocess
 
-
 # Accepted specifiers (per action.yml inline comment after fix)
 ACCEPTED = [
     "0.1.0",

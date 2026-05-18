@@ -49,6 +49,19 @@ class Finding(BaseModel):
     control_title: str | None = None
 
 
+class SkippedFile(BaseModel):
+    """A target file a detection engine could not parse, excluded from
+    static-analysis coverage.
+
+    Informational only: a skipped file records a coverage gap so operators can
+    see what automated analysis missed. It does NOT mark the scan degraded and
+    does NOT affect the exit code — unlike a method="error" Finding.
+    """
+
+    path: str
+    reason: str = ""  # detection-engine error type, e.g. "Syntax error"
+
+
 class AssessmentResult(BaseModel):
     profile_id: str
     profile_title: str
@@ -60,3 +73,11 @@ class AssessmentResult(BaseModel):
     # A-H2: True when any engine emitted a sentinel finding (method="error"),
     # indicating the scan partially failed. CLI exits 2 when scan_degraded=True.
     scan_degraded: bool = False
+    # Target files static analysis could not parse — a coverage gap, not a
+    # failure. Surfaced in the summary/report so operators can see what was
+    # missed without reading scan logs. Does not affect scan_degraded.
+    skipped_files: list[SkippedFile] = Field(default_factory=list)
+    # The full resolved control set the scan ran against. Lets report emitters
+    # join findings back to a control's statement/guidance and account for
+    # passed (no-finding) controls. Defaults empty so older callers still work.
+    resolved_controls: list[Control] = Field(default_factory=list)

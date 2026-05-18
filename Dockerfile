@@ -40,11 +40,13 @@ RUN apt-get update \
 
 COPY --from=builder /dist/*.whl /tmp/
 # A-M7: TODO(P0-08): add docker/requirements-hashed.txt with --require-hashes once
-# semgrep==1.95.0 and compliance-assess are published to PyPI and hashes are generated via:
-#   pip download --no-deps semgrep==1.95.0 && pip hash <wheel>
+# semgrep==1.163.0 and compliance-assess are published to PyPI and hashes are generated via:
+#   pip download --no-deps semgrep==1.163.0 && pip hash <wheel>
 # Until then the version pin is the strongest available defence without PyPI access.
+# semgrep is kept current: older tree-sitter grammars reject valid modern
+# TypeScript/JS syntax and silently drop those files from static coverage.
 RUN /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install /tmp/*.whl "semgrep==1.95.0" \
+    && /opt/venv/bin/pip install /tmp/*.whl "semgrep==1.163.0" \
     && rm /tmp/*.whl
 
 # Non-root user. compliance-assess only needs read access to the target directory and write

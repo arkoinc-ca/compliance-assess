@@ -13,9 +13,16 @@ from typing import Any
 import structlog
 import yaml
 
-from .detection import DetectionEngine, QuestionnaireEngine
+from .detection import DetectionEngine, QuestionnaireEngine, SemgrepEngine
 from .exceptions import AppError, NotFoundError, ValidationError
-from .models import AssessmentResult, Control, Finding, Profile, ProfileImport
+from .models import (
+    AssessmentResult,
+    Control,
+    Finding,
+    Profile,
+    ProfileImport,
+    SkippedFile,
+)
 from .result import Err, Ok, Result
 
 _log = structlog.get_logger("compliance_assess.assessor")
@@ -259,6 +266,18 @@ class Assessor:
         # A-H2: scan is degraded when any sentinel error finding is present
         scan_degraded = any(f.method == "error" for f in all_findings)
 
+        # Collect target files static analysis could not parse. These are a
+        # coverage gap, not a failure — they do NOT set scan_degraded. Dedup by
+        # path across engines so a file skipped under many controls lists once.
+        skipped_files: list[SkippedFile] = []
+        seen_skipped: set[str] = set()
+        for engine in engines:
+            if isinstance(engine, SemgrepEngine):
+                for sf in engine.skipped_files:
+                    if sf.path not in seen_skipped:
+                        seen_skipped.add(sf.path)
+                        skipped_files.append(sf)
+
         return Ok(
             AssessmentResult(
                 profile_id=profile.uuid,
@@ -269,5 +288,7 @@ class Assessor:
                 controls_assessed=len(profile.resolved_controls),
                 controls_with_findings=controls_with_findings,
                 scan_degraded=scan_degraded,
+                skipped_files=skipped_files,
+                resolved_controls=list(profile.resolved_controls),
             )
         )

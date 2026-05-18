@@ -21,6 +21,10 @@ dependencies = [
 oscal = [
     "compliance-trestle>=2.0",
 ]
+# pdf extra: branded, client-ready PDF report output via `pip install compliance-assess[pdf]`
+pdf = [
+    "reportlab>=4.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -29,7 +33,8 @@ dev = [
     "jsonschema>=4.0",
     "types-jsonschema",
     "types-PyYAML",
-    "semgrep==1.95.0; sys_platform != 'win32'",
+    "semgrep==1.163.0; sys_platform != 'win32'",
+    "reportlab>=4.0",
 ]
 
 [project.scripts]
@@ -46,6 +51,11 @@ warn_unused_ignores = true
 disallow_untyped_defs = true
 disallow_any_generics = true
 exclude = ["tests/fixtures/sample-app", "tests/fixtures/corpus"]
+
+# ReportLab (optional 'pdf' extra) ships no type stubs.
+[[tool.mypy.overrides]]
+module = ["reportlab.*"]
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100

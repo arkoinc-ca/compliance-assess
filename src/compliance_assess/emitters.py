@@ -265,10 +265,25 @@ class MarkdownEmitter:
             f"| Findings — medium | {n_medium} |",
             f"| Findings — low | {n_low} |",
             f"| Findings — total | {len(result.findings)} |",
-            "",
-            "## Findings",
+            f"| Files skipped (parse errors) | {len(result.skipped_files)} |",
             "",
         ]
+
+        if result.skipped_files:
+            lines.append("## Scan Coverage")
+            lines.append("")
+            lines.append(
+                f"{len(result.skipped_files)} file(s) could not be parsed by static "
+                "analysis and were excluded from automated coverage. The findings "
+                "below do not reflect these files:"
+            )
+            lines.append("")
+            for sf in result.skipped_files:
+                reason = f" — {sf.reason}" if sf.reason else ""
+                lines.append(f"- `{sf.path}`{reason}")
+            lines.append("")
+
+        lines.extend(["## Findings", ""])
 
         for severity in ("high", "medium", "low"):
             heading = severity.capitalize()
@@ -379,8 +394,26 @@ class HTMLEmitter:
             f'<tr><td class="sev-high">Findings — high</td><td>{n_high}</td></tr>\n'
             f'<tr><td class="sev-medium">Findings — medium</td><td>{n_medium}</td></tr>\n'
             f'<tr><td class="sev-low">Findings — low</td><td>{n_low}</td></tr>\n'
-            f"<tr><td>Findings — total</td><td>{len(result.findings)}</td></tr>"
+            f"<tr><td>Findings — total</td><td>{len(result.findings)}</td></tr>\n"
+            f"<tr><td>Files skipped (parse errors)</td>"
+            f"<td>{len(result.skipped_files)}</td></tr>"
         )
+
+        coverage_section = ""
+        if result.skipped_files:
+            items = "\n".join(
+                f"  <li><code>{html.escape(sf.path)}</code>"
+                + (f" — {html.escape(sf.reason)}" if sf.reason else "")
+                + "</li>"
+                for sf in result.skipped_files
+            )
+            coverage_section = (
+                "\n<h2>Scan Coverage</h2>\n"
+                f"<p>{len(result.skipped_files)} file(s) could not be parsed by "
+                "static analysis and were excluded from automated coverage. "
+                "The findings below do not reflect these files:</p>\n"
+                f"<ul>\n{items}\n</ul>\n"
+            )
 
         severity_sections = "\n".join(
             _html_severity_section(sev, groups.get(sev, [])) for sev in ("high", "medium", "low")
@@ -411,7 +444,7 @@ class HTMLEmitter:
 {summary_rows}
 </tbody>
 </table>
-
+{coverage_section}
 <h2>Findings</h2>
 {severity_sections}
 

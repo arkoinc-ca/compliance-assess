@@ -34,6 +34,7 @@ _PROFILE = _CATALOG / "profiles" / "use-case" / "saas-canada-b2c.yaml"
 
 _AUDIT_RULE = "detection-rules/semgrep/missing-audit.yaml"
 _DSR_RULE = "detection-rules/semgrep/missing-dsr.yaml"
+_PII_RULE = "detection-rules/semgrep/pii-in-logs.yaml"
 
 pytestmark = [
     pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep not on PATH"),
@@ -111,6 +112,37 @@ def test_semgrep_ignores_browser_delete_calls(tmp_path: Path) -> None:
         "browser .delete() calls were flagged: "
         f"{[(f.file, f.line) for f in semgrep_findings]}"
     )
+
+
+def test_pii_in_logs_detects_concat_and_template_leaks(tmp_path: Path) -> None:
+    """The pii-in-logs rule must flag PII reaching a logger via string
+    concatenation, template-literal / f-string substitution, and multi-argument
+    calls — not only a bare member-access argument (the pre-fix coverage).
+
+    Guards Issue 3b: the prior rule matched solely `logger.x(obj.email)` and
+    silently missed `logger.x("..." + obj.phone)` and `` logger.x(`${obj.email}`) ``.
+    The negative fixtures (`tokenEndpoint`, `email_provider`, redacted strings)
+    must NOT fire — that guards the anchored field-name regex.
+    """
+    scan_dir = tmp_path / "scan"
+    shutil.copytree(_CORPUS / "pii-in-logs", scan_dir)
+
+    engine = _engine_for([_PII_RULE], "TEST-PII")
+    findings = engine.detect(_control("TEST-PII"), scan_dir, [])
+
+    error_findings = [f for f in findings if f.method == "error"]
+    assert error_findings == [], (
+        f"rule parse error or scan failure: {[f.message for f in error_findings]}"
+    )
+
+    hits = {(Path(f.file).name, f.line) for f in findings if f.method == "semgrep" and f.file}
+    positive_hits = sorted((n, ln) for (n, ln) in hits if n.startswith("positive"))
+    negative_hits = sorted((n, ln) for (n, ln) in hits if n.startswith("negative"))
+
+    # positive.ts and positive.py each carry 4 leak lines (concat, template /
+    # f-string, multi-arg, direct) — all 8 must fire.
+    assert len(positive_hits) == 8, f"expected 8 PII-in-log hits, got {positive_hits}"
+    assert negative_hits == [], f"false positives in negative fixtures: {negative_hits}"
 
 
 def test_cli_scan_surfaces_semgrep_findings(tmp_path: Path) -> None:

@@ -51,6 +51,24 @@ _EMITTER_MAP: dict[str, type[Emitter]] = {
     "csv": CSVEmitter,
 }
 
+# "pdf" is handled separately: it depends on the optional 'pdf' extra
+# (ReportLab) and is imported lazily so the core CLI works without it.
+_PDF_FORMAT = "pdf"
+_VALID_FORMATS = frozenset(_EMITTER_MAP) | {_PDF_FORMAT}
+
+
+def _load_pdf_emitter() -> type[Emitter]:
+    """Import the PDF emitter, raising a friendly error if the extra is absent."""
+    try:
+        from .pdf import PDFEmitter
+    except ImportError as exc:
+        raise typer.BadParameter(
+            "PDF output requires the optional 'pdf' extra. "
+            "Install it with: pip install 'compliance-assess[pdf]'",
+            param_hint="--format",
+        ) from exc
+    return PDFEmitter
+
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -114,7 +132,9 @@ def scan(
     catalog: str | None = typer.Option(None, "--catalog", help="Path to catalog root"),  # noqa: B008
     out: str | None = typer.Option(None, "--out", help="Output directory for results"),  # noqa: B008
     fmt: str = typer.Option(
-        "sarif,markdown", "--format", help="Output format(s): sarif,markdown,html,csv"
+        "sarif,markdown",
+        "--format",
+        help="Output format(s): sarif,markdown,html,csv,pdf (pdf needs the 'pdf' extra)",
     ),  # noqa: B008 E501
     timeout: float = typer.Option(30.0, "--timeout", help="Per-scan timeout in seconds"),  # noqa: B008
 ) -> None:
@@ -129,11 +149,15 @@ def scan(
 
     format_tokens = [t.strip().lower() for t in fmt.split(",") if t.strip()]
     for token in format_tokens:
-        if token not in _EMITTER_MAP:
+        if token not in _VALID_FORMATS:
             raise typer.BadParameter(
-                f"Unknown format '{token}'. Valid values: {', '.join(_EMITTER_MAP)}",
+                f"Unknown format '{token}'. "
+                f"Valid values: {', '.join(sorted(_VALID_FORMATS))}",
                 param_hint="--format",
             )
+    # Fail fast if the 'pdf' extra is missing — before running a long scan.
+    if _PDF_FORMAT in format_tokens:
+        _load_pdf_emitter()
 
     assessor = Assessor(catalog_path, timeout_s=timeout)
     profile_result = assessor.load_profile(profile_path)
@@ -177,6 +201,7 @@ def scan(
         controls_with_findings=ar.controls_with_findings,
         total_findings=len(ar.findings),
         severity_counts=severity_counts,
+        skipped_file_count=len(ar.skipped_files),
     )
     if severity_counts.get("high"):
         _log.warning("high_severity_findings", severity="high", count=severity_counts["high"])
@@ -192,9 +217,19 @@ def scan(
         if count:
             typer.echo(f"  {sev}: {count}")
 
+    # Coverage gaps: files static analysis could not parse. Informational —
+    # does not affect the exit code, but operators must see what was missed.
+    if ar.skipped_files:
+        typer.echo(f"Files skipped (parse errors): {len(ar.skipped_files)}")
+        for sf in ar.skipped_files:
+            detail = f" ({sf.reason})" if sf.reason else ""
+            typer.echo(f"  - {sf.path}{detail}")
+
     # Invoke emitters — one output file per requested format.
     for token in format_tokens:
-        emitter_cls = _EMITTER_MAP[token]
+        emitter_cls = (
+            _load_pdf_emitter() if token == _PDF_FORMAT else _EMITTER_MAP[token]
+        )
         emitter = emitter_cls()
         output_path = out_dir / f"compliance-assessment.{emitter.extension}"
         emitter.emit(ar, output_path)
@@ -210,6 +245,9 @@ def scan(
         # by_method lets CI consumers see whether automated detection actually ran
         # (e.g. semgrep=0 alongside questionnaire>0 signals the scanner is degraded).
         "by_method": method_counts,
+        # Count of target files static analysis could not parse — a coverage gap
+        # a CI consumer can gate or trend on independently of findings.
+        "skipped_files": len(ar.skipped_files),
     }
     summary_path = out_dir / "compliance-summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")

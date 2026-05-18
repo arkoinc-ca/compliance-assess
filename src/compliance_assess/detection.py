@@ -13,7 +13,7 @@ from typing import Protocol, runtime_checkable
 import structlog
 import yaml
 
-from .models import Control, Finding, SeverityLiteral
+from .models import Control, Finding, SeverityLiteral, SkippedFile
 
 _log = structlog.get_logger("compliance_assess.detection")
 
@@ -44,6 +44,49 @@ def _is_semgrep_rule_error(err: dict[str, object]) -> bool:
     err_type = str(err.get("type", "")).lower()
     err_msg = str(err.get("message", "")).lower()
     return any(k in err_type for k in _RULE_ERROR_KEYWORDS) or "invalid yaml" in err_msg
+
+
+def _semgrep_error_type(err: dict[str, object]) -> str:
+    """Return the error type from a semgrep errors[] entry ("Syntax error", …)."""
+    raw = err.get("type", "")
+    return raw.strip() if isinstance(raw, str) else ""
+
+
+def _semgrep_error_path(err: dict[str, object]) -> str:
+    """Extract the target file path from a semgrep errors[] entry.
+
+    The path is normally a top-level `path`; older payloads carry it only in
+    the first `spans` entry. Return "" when neither is present.
+    """
+    path = err.get("path")
+    if isinstance(path, str) and path:
+        return path
+    spans = err.get("spans")
+    if isinstance(spans, list) and spans and isinstance(spans[0], dict):
+        span_file = spans[0].get("file")
+        if isinstance(span_file, str) and span_file:
+            return span_file
+    return ""
+
+
+def _skipped_files_from_errors(
+    target_errors: list[dict[str, object]],
+) -> list[SkippedFile]:
+    """Convert semgrep target-file parse errors into SkippedFile records.
+
+    One record per distinct file path; the error `type` becomes the reason.
+    Errors with no resolvable path are dropped — a path-less coverage note is
+    not actionable for an operator.
+    """
+    seen: set[str] = set()
+    result: list[SkippedFile] = []
+    for err in target_errors:
+        path = _semgrep_error_path(err)
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        result.append(SkippedFile(path=path, reason=_semgrep_error_type(err) or "parse error"))
+    return result
 
 
 def _normalize_severity(raw: str) -> SeverityLiteral:
@@ -107,6 +150,10 @@ class SemgrepEngine:
         # A-M2: per-instance flag prevents module-global state from bleeding between
         # test cases that construct separate SemgrepEngine instances.
         self._semgrep_warned: bool = False
+        # Coverage gaps accumulated across every detect() call on this instance:
+        # target files semgrep could not parse. Deduplicated by path. Read by
+        # the Assessor after the scan and surfaced in the report/summary.
+        self.skipped_files: list[SkippedFile] = []
 
     def detect(
         self,
@@ -265,10 +312,16 @@ class SemgrepEngine:
                 target_errors = [e for e in semgrep_errors if not _is_semgrep_rule_error(e)]
 
                 if target_errors:
+                    skipped = _skipped_files_from_errors(target_errors)
+                    for sf in skipped:
+                        if all(known.path != sf.path for known in self.skipped_files):
+                            self.skipped_files.append(sf)
                     _log.warning(
                         "semgrep_partial_scan",
                         control_id=control.id,
                         error_count=len(target_errors),
+                        skipped_files=[sf.path for sf in skipped],
+                        error_types=sorted({sf.reason for sf in skipped}),
                     )
 
                 if rule_errors:

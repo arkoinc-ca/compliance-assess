@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from compliance_assess.emitters import CSVEmitter, HTMLEmitter, MarkdownEmitter, SARIFEmitter
-from compliance_assess.models import AssessmentResult, Finding
+from compliance_assess.models import AssessmentResult, Finding, SkippedFile
 
 # ---------------------------------------------------------------------------
 # Shared fixture
@@ -31,6 +31,7 @@ def sample_result() -> AssessmentResult:
         timestamp=datetime(2026, 5, 9, 12, 0, 0, tzinfo=UTC),
         controls_assessed=5,
         controls_with_findings=2,
+        skipped_files=[SkippedFile(path="src/vendor/legacy.ts", reason="Syntax error")],
         findings=[
             Finding(
                 control_id="CTRL-001",
@@ -121,6 +122,28 @@ def test_markdown_emitter_renders_severity_groups(
     # Low severity section must be present and flagged as empty
     assert "### Low severity" in text
     assert "_None._" in text
+
+
+def test_markdown_emitter_names_skipped_files(tmp_path: Path) -> None:
+    """A file static analysis could not parse must be named in a Scan Coverage
+    section — otherwise the coverage gap is invisible outside the scan logs."""
+    result = AssessmentResult(
+        profile_id="cov-v1",
+        profile_title="Coverage Profile",
+        target="/repo/src",
+        timestamp=datetime(2026, 5, 18, tzinfo=UTC),
+        controls_assessed=3,
+        controls_with_findings=0,
+        skipped_files=[SkippedFile(path="src/legacy/parser.ts", reason="Syntax error")],
+    )
+
+    out = tmp_path / "coverage.md"
+    MarkdownEmitter().emit(result, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "## Scan Coverage" in text
+    assert "src/legacy/parser.ts" in text
+    assert "Syntax error" in text
 
 
 # ---------------------------------------------------------------------------
