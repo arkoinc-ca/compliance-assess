@@ -3,7 +3,7 @@
 # Stage 2: runtime. Slim image with the wheel installed; entrypoint = compliance-assess.
 
 # TODO(P0-08): pin to digest — FROM python:3.11-slim-bookworm@sha256:<digest> AS builder
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -24,7 +24,7 @@ RUN pip install --upgrade pip build \
 
 
 # TODO(P0-08): pin to digest — FROM python:3.11-slim-bookworm@sha256:<digest> AS runtime
-FROM python:3.11-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
